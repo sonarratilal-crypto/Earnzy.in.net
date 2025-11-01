@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return request.auth.token.isAdmin == true;
+    }
+    
+    function isUser(uid) {
+      return request.auth.uid == uid;
+    }
+    
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    
+    // Users collection: users can read/write their own doc with restrictions
+    match /users/{userId} {
+      allow read, write: if isAuthenticated() && isUser(userId);
+      
+      // Additional constraints for writes
+      allow update: if 
+        // Can only update specific fields
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'device_fingerprints'
+        ]) ||
+        // Admin can update anything
+        isAdmin();
+        
+      allow create: if 
+        // Only allow creating user doc with same uid as auth
+        request.auth.uid == userId &&
+        // Validate required fields
+        request.resource.data.uid is string &&
+        request.resource.data.phone is string &&
+        request.resource.data.plan is string &&
+        request.resource.data.coins is number &&
+        request.resource.data.withdrawable_coins is number &&
+        request.resource.data.pending_referral_coins is number &&
+        request.resource.data.tasks_completed is number &&
+        request.resource.data.sponsored_tasks_completed is number &&
+        request.resource.data.referrals is map &&
+        request.resource.data.flagged is boolean &&
+        request.resource.data.created_at is timestamp;
+    }
+    
+    // Sponsored tasks: read for all auth users, write only for admin
+    match /sponsored_tasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // Withdraw requests: users can create and read their own
+    match /withdraw_requests/{requestId} {
+      allow read: if isAuthenticated() && isUser(resource.data.uid);
+      allow create: if 
+        isAuthenticated() && 
+        isUser(request.resource.data.uid) &&
+        // Validate required fields for new request
+        request.resource.data.request_id is string &&
+        request.resource.data.uid is string &&
+        request.resource.data.requested_coins is number &&
+        request.resource.data.requested_inr is number &&
+        request.resource.data.fee_pct is number &&
+        request.resource.data.final_amount_inr is number &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.created_at is timestamp;
+      
+      // Only admin can update status
+      allow update: if isAdmin() && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'reviewed_by', 'reviewed_at', 'kyc_required'
+        ]);
+    }
+    
+    // Admin revenue: admin only
+    match /admin_revenue/{entryId} {
+      allow read, write: if isAdmin();
+    }
+    
+    // Referral events: users can read their own and create new ones
+    match /referral_events/{refId} {
+      allow read: if isAuthenticated() && isUser(resource.data.referrer_uid);
+      allow create: if 
+        isAuthenticated() && 
+        isUser(request.resource.data.referrer_uid) &&
+        // Validate required fields
+        request.resource.data.ref_id is string &&
+        request.resource.data.referrer_uid is string &&
+        request.resource.data.referee_uid is string &&
+        request.resource.data.type is string &&
+        request.resource.data.amount_coins_pending is number &&
+        request.resource.data.validated is boolean;
+    }
+    
+    // Platform config: admin only
+    match /platform_config/{docId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
